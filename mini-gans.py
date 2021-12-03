@@ -7,8 +7,12 @@ import torchvision
 import torchvision.datasets as datasets
 from torch.utils.data import DataLoader
 import torchvision.transforms as transforms
-import PIL.Image
+from PIL import Image 
+import PIL 
+import os
+from numpy import random
 import numpy as np
+import pytorch_fid.fid_score
 from torch.utils.tensorboard import SummaryWriter
 
 # Discriminator judges the image if it is a fake or real
@@ -41,16 +45,21 @@ class Generator(nn.Module):
     def forward(self, x):
         return self.gen(x)
 
+
 @click.command()
 @click.option('--num_epochs', default=50, help='Number of epochs to train.')
 @click.option('--report_tensorboard', default=False, help='Use tensorboard for reporting.')
 @click.option('--report_wandb', default=False, help='Use weights & biases for reporting.')
-def train(num_epochs, report_tensorboard, report_wandb):
+@click.option('--calculate_fid', default=False, help='Calculate the Frechet inception distance metric between fakes and reals.')
+def train(num_epochs, report_tensorboard, report_wandb, calculate_fid):
+    runid = random.randint(9999999)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     learning_rate = 3e-4
     z_dim = 64
     image_dim = 28 * 28 * 1
     batch_size = 32
+
+    fid_samples = 2048
 
     disc = Discriminator(image_dim).to(device)
     gen = Generator(z_dim, image_dim).to(device)
@@ -60,19 +69,32 @@ def train(num_epochs, report_tensorboard, report_wandb):
     )
     dataset = datasets.MNIST(root="dataset/", transform=tforms, download=True)
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+    fid_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
     opt_disc = optim.Adam(disc.parameters(), lr=learning_rate)
     opt_gen = optim.Adam(gen.parameters(), lr=learning_rate)
     criterion = nn.BCELoss()
     writer_fake = SummaryWriter(f"runs/GAN_MNIST/fake")
     writer_real = SummaryWriter(f"runs/GAN_MNIST/real")
 
-    if(report_wandb):
+    if report_wandb:
         wandb.init(project="mini-gans", entity="taptoi")
         wandb.config = {
                 "learning_rate": learning_rate,
                 "epochs": num_epochs,
                 "batch_size": batch_size
                 }
+
+    image_func = lambda im : Image.fromarray(im, 'L')
+
+    if calculate_fid:
+        if not os.path.exists(f'fid/run{runid}/reals'):
+                        os.makedirs(f'fid/run{runid}/reals')
+        for batch_idx, (fid_reals, _) in enumerate(fid_loader):
+            if(batch_idx * batch_size == fid_samples):
+                break
+            reals = fid_reals.reshape(-1, 1, 28, 28).cpu().detach().numpy()
+            for i in range(batch_size):
+                image_func(reals[i][0].astype('uint8')).save(f"fid/run{runid}/reals/real{i + batch_idx * batch_size:04d}.png")
 
     for epoch in range(num_epochs):
         for batch_idx, (real, _) in enumerate(loader):
@@ -98,8 +120,28 @@ def train(num_epochs, report_tensorboard, report_wandb):
             gen.zero_grad()
             lossG.backward()
             opt_gen.step()
+                        
+            if calculate_fid:
+                if batch_idx == 0:
+                    # generate fakes datasets for FID calculation:
+                    if not os.path.exists(f'fid/run{runid}/fakes'):
+                        os.makedirs(f'fid/run{runid}/fakes')
+                    
+                    with torch.no_grad():
+                        for batch in range(round(fid_samples / batch_size)):
+                            noise_input = torch.randn(batch_size, z_dim).to(device)
+                            fakes = gen(noise_input).reshape(-1, 1, 28, 28)                          
+                            for i in range(batch_size):
+                                torchvision.utils.save_image(fakes[i][0], f"fid/run{runid}/fakes/fake{i + batch * batch_size:04d}.png",normalize=True)
+                    path_fakes = f"fid/run{runid}/fakes"
+                    path_reals = f"fid/run{runid}/reals"
+                    fid_value = pytorch_fid.fid_score.calculate_fid_given_paths((path_fakes, path_reals), 50, device, fid_samples, 8)
+                    if(report_wandb):
+                        wandb.log({"FID": fid_value})
+                    print("FID value: ", fid_value)
 
-            if(report_tensorboard):
+
+            if report_tensorboard:
                 if batch_idx == 0:
                     print(
                         f"Epoch [{epoch + 1}/{num_epochs}] \ "
@@ -120,7 +162,7 @@ def train(num_epochs, report_tensorboard, report_wandb):
                         )
                         
             
-            if(report_wandb):
+            if report_wandb:
                 if batch_idx == 0:
                     print(
                         f"Epoch [{epoch + 1}/{num_epochs}] \ "
