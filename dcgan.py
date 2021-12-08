@@ -25,6 +25,8 @@ import matplotlib.animation as animation
 from IPython.display import HTML
 import pytorch_fid.fid_score
 from numpy import random
+import classifier
+import pandas as pd
 
 
 # custom weights initialization called on netG and netD
@@ -99,8 +101,9 @@ class Discriminator(nn.Module):
 @click.command()
 @click.option('--num_epochs', default=5, help='Number of epochs to train.')
 @click.option('--report_wandb', default=False, help='Use weights & biases for reporting.')
-@click.option('--calculate_fid', default=False, help='Calculate the Frechet inception distance metric between fakes and reals.')
-def train(num_epochs, report_wandb, calculate_fid):
+@click.option('--calculate_metrics', default=False, help='Calculate the Frechet inception distance metric between fakes and reals.')
+@click.option('--classifier_model_path', default="", help='Path for image classifier model used for metrics calculations.')
+def train(num_epochs, report_wandb, calculate_metrics, classifier_model_path):
     
     runid = random.randint(9999999)
     # Set random seed for reproducibility
@@ -190,7 +193,7 @@ def train(num_epochs, report_wandb, calculate_fid):
     optimizerG = optim.Adam(netG.parameters(), lr=lr, betas=(beta1, 0.999))
 
     image_func = lambda im : Image.fromarray(im, 'L')
-    if calculate_fid:
+    if calculate_metrics:
         if not os.path.exists(f'fid/run{runid}/reals'):
                         os.makedirs(f'fid/run{runid}/reals')
         for batch_idx, (fid_reals, _) in enumerate(fid_loader):
@@ -296,7 +299,7 @@ def train(num_epochs, report_wandb, calculate_fid):
                 wandb.log({"fakes": wdb_fakes})
                 wandb.log({"reals": wdb_reals})
 
-            if calculate_fid:
+            if calculate_metrics:
                 if batch_idx == 0:
                     # generate fakes datasets for FID calculation:
                     if not os.path.exists(f'fid/run{runid}/fakes'):
@@ -314,6 +317,16 @@ def train(num_epochs, report_wandb, calculate_fid):
                     if(report_wandb):
                         wandb.log({"FID": fid_value})
                     print("FID value: ", fid_value)
+                    fake_classes = classifier.infer(path_fakes, classifier_model_path)
+
+                    series = pd.Series(fake_classes)
+                    series.plot.hist(grid=True, bins=10, rwidth=1.2,
+                                    color='#607c8e')
+                    plt.title('Predicted labels for generated numbers')
+                    plt.xlabel('Labels')
+                    plt.ylabel('Number generated')
+                    plt.grid(axis='y', alpha=0.75)
+                    wandb.log({"Histogram": wandb.Image(plt)})
 
             iters += 1
 
