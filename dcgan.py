@@ -107,7 +107,7 @@ def train(num_epochs, report_wandb, calculate_metrics, classifier_model_path):
     
     runid = random.randint(9999999)
     # Set random seed for reproducibility
-    manualSeed = 222
+    manualSeed = 2342
     #manualSeed = random.randint(1, 10000) # use if you want new results
     print("Random Seed: ", manualSeed)
     random.seed(manualSeed)
@@ -192,19 +192,17 @@ def train(num_epochs, report_wandb, calculate_metrics, classifier_model_path):
     optimizerD = optim.Adam(netD.parameters(), lr=lr, betas=(beta1, 0.999))
     optimizerG = optim.Adam(netG.parameters(), lr=lr, betas=(beta1, 0.999))
 
-    image_func = lambda im : Image.fromarray(im, 'L')
     if calculate_metrics:
         if not os.path.exists(f'fid/run{runid}/reals'):
                         os.makedirs(f'fid/run{runid}/reals')
         for batch_idx, (fid_reals, _) in enumerate(fid_loader):
             if(batch_idx * batch_size == fid_samples):
                 break
-            reals = fid_reals.reshape(-1, 1, 64, 64).cpu().detach().numpy()
+            reals = fid_reals.reshape(-1, 3, 64, 64)
             for i in range(batch_size):
-                image_func(reals[i][0].astype('uint8')).save(f"fid/run{runid}/reals/real{i + batch_idx * batch_size:04d}.png")
+                torchvision.utils.save_image(reals[i][0], f"fid/run{runid}/reals/real{i + batch_idx * batch_size:04d}.png",normalize=True)
 
     # Training Loop
-
     # Keep track of progress
     iters = 0
 
@@ -307,8 +305,8 @@ def train(num_epochs, report_wandb, calculate_metrics, classifier_model_path):
                     
                     with torch.no_grad():
                         for batch in range(round(fid_samples / batch_size)):
-                            noise_input = torch.randn(64, nz, 1, 1, device=device)
-                            fakes = netG(noise_input).reshape(-1, 1, 64, 64)                          
+                            noise_input = torch.randn(batch_size, nz, 1, 1, device=device)
+                            fakes = netG(noise_input).reshape(-1, 3, 64, 64)                          
                             for i in range(batch_size):
                                 torchvision.utils.save_image(fakes[i][0], f"fid/run{runid}/fakes/fake{i + batch * batch_size:04d}.png",normalize=True)
                     path_fakes = f"fid/run{runid}/fakes"
@@ -320,7 +318,7 @@ def train(num_epochs, report_wandb, calculate_metrics, classifier_model_path):
                     fake_classes = classifier.infer(path_fakes, classifier_model_path)
 
                     series = pd.Series(fake_classes)
-                    series.plot.hist(grid=True, bins=10, rwidth=1.2,
+                    series.plot.hist(grid=True, bins=10, rwidth=1,
                                     color='#607c8e')
                     plt.title('Predicted labels for generated numbers')
                     plt.xlabel('Labels')
